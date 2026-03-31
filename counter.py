@@ -13,24 +13,6 @@ FLOW:
   3. SPACE to start counting
 """
 
-# ─────────────────────── CONFIG ──────────────────────────────────────────────
-
-DEFAULT_VIDEO  = "01.50fps.mp4.mp4"
-MODELS_DIR     = "models"
-CLASSES        = [0]
-CONF           = 0.35
-IOU            = 0.45
-TRACKER        = "bytetrack.yaml"
-DRAW_TRACKS    = True
-TRAIL_LEN      = 30
-SKIP_FRAMES    = 0
-LINE_THICKNESS = 3
-HUD_ALPHA      = 0.70
-MAX_WIN_W      = 1280
-MAX_WIN_H      = 850
-
-# ─────────────────────────────────────────────────────────────────────────────
-
 import sys, os, collections, tkinter as tk
 from tkinter import filedialog
 import cv2
@@ -47,6 +29,26 @@ except ImportError:
     sys.exit("[ERROR] Run: RUN_CV_COUNT.bat")
 
 
+# ─────────────────────── CONFIG ──────────────────────────────────────────────
+
+ASSETS_DIR     = "assets"
+MODELS_DIR     = "models"
+DEFAULT_VIDEO  = os.path.join(ASSETS_DIR, "01.50fps.mp4.mp4")
+CLASSES        = [0]
+CONF           = 0.35
+IOU            = 0.45
+TRACKER        = "bytetrack.yaml"
+DRAW_TRACKS    = True
+TRAIL_LEN      = 30
+SKIP_FRAMES    = 0
+LINE_THICKNESS = 3
+HUD_ALPHA      = 0.70
+MAX_WIN_W      = 1280
+MAX_WIN_H      = 850
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 # ─────────────────────── helpers ─────────────────────────────────────────────
 
 _PALETTE = [
@@ -57,13 +59,16 @@ _PALETTE = [
 def _side(pt,a,b):
     return (b[0]-a[0])*(pt[1]-a[1])-(b[1]-a[1])*(pt[0]-a[0])
 
-def _centroid(box):
-    x1,y1,x2,y2=box
-    return int((x1+x2)/2),int((y1+y2)/2)
+def _get_poi(box, point_type="center"):
+    """Get Point of Interest (PoI) for tracking."""
+    x1,y1,x2,y2 = box
+    if point_type == "base":
+        return int((x1+x2)/2), int(y2)
+    return int((x1+x2)/2), int((y1+y2)/2)
 
 def _puttext(img,txt,pos,scale=0.48,color=(210,210,220),thick=1,bold=False):
     cv2.putText(img,txt,pos,cv2.FONT_HERSHEY_SIMPLEX,scale,color,
-                thick+(1 if bold else 0),cv2.LINE_AA)
+                int(thick) + (1 if bold else 0),cv2.LINE_AA)
 
 def _in_rect(x,y,rx,ry,rw,rh):
     return rx<=x<=rx+rw and ry<=y<=ry+rh
@@ -73,6 +78,37 @@ def _inside_zone(pt, zone_poly):
     poly = np.array(zone_poly, dtype=np.int32)
     return cv2.pointPolygonTest(poly, (float(pt[0]),float(pt[1])), False) >= 0
 
+def _detect_device():
+    """Detect available GPU/NPU acceleration for YOLO inference."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            # NVIDIA CUDA
+            return "NVIDIA CUDA (RTX/GTX)", "0"
+        
+        # Diagnostics
+        has_gpu_hw = False
+        try:
+            import subprocess
+            res = subprocess.run(["nvidia-smi"], capture_output=True)
+            if res.returncode == 0: has_gpu_hw = True
+        except: pass
+
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            return "Apple Metal (MPS)", "mps"
+        
+        if torch.version.cuda is None and has_gpu_hw:
+            return "CPU (GPU Found but Torch is CPU-only)", "cpu"
+        elif has_gpu_hw:
+            # Maybe driver is missing or mismatch
+            return "CPU (NVIDIA Found but Driver/CUDA Error)", "cpu"
+        
+        return "CPU (No Acceleration found)", "cpu"
+    except ImportError:
+        return "CPU (PyTorch not found)", "cpu"
+    except: pass
+    return "CPU (No Acceleration found)", "cpu"
+
 
 # ─────────────────────── settings screen ─────────────────────────────────────
 
@@ -81,6 +117,7 @@ _MODELS = [
     ("YOLO26 Small",  "yolo26s.pt"),
     ("YOLO26 Medium", "yolo26m.pt"),
     ("YOLO26 Large",  "yolo26l.pt"),
+    ("YOLO26 XLarge", "yolo26x.pt"),
     ("YOLO11 Nano",   "yolo11n.pt"),
     ("YOLO11 Medium", "yolo11m.pt"),
     ("YOLOv8 Nano",   "yolov8n.pt"),
@@ -91,10 +128,12 @@ _MODES = [
     ("One-way only     --  adds +1 for IN side only", "one_way"),
     ("Net occupancy    --  adds IN +1 / OUT -1",      "net"),
 ]
-_LATEST = {"yolo26n.pt","yolo26s.pt","yolo26m.pt","yolo26l.pt"}
+_LATEST = {"yolo26n.pt","yolo26s.pt","yolo26m.pt","yolo26l.pt","yolo26x.pt"}
 
-_BG=(18,18,22); _CARD=(28,28,36); _ACC=(0,190,255); _GRN=(0,220,110); _WHITE=(255,255,255)
-_SEL=(0,65,100); _HOV=(40,40,55); _TXT=(215,215,225); _MUT=(115,115,130)
+# 🎨 THEME: SLATE & EMERALD
+_BG=(15,12,10); _CARD=(28,24,20); _ACC=(129,185,16); _INF=(212,182,6); _GRN=(80,210,120)
+_SEL=(60,45,20); _HOV=(45,35,25); _WHITE=(252,250,248); _MUT=(148,115,100); _RED=(70,70,225)
+_TXT=(215,215,225)
 
 def _mdl_cached(fn):
     return os.path.isfile(os.path.join(MODELS_DIR,fn)) or (os.path.isabs(fn) and os.path.isfile(fn))
@@ -103,21 +142,45 @@ def pick_file():
     root = tk.Tk()
     root.withdraw()
     root.attributes('-topmost', True)
+    init_dir = os.path.abspath(ASSETS_DIR) if os.path.isdir(ASSETS_DIR) else None
     fpath = filedialog.askopenfilename(title="Select Video File", 
+                                       initialdir=init_dir,
                                        filetypes=[("Video files", "*.mp4 *.avi *.mkv *.mov")])
     root.destroy()
     return fpath
 
 def settings_screen():
-    SW,SH = 900, 780
+    SW,SH = 900, 1020
     WIN   = "CV-Count -- Settings"
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN, SW, SH)
+
+    hw_label, device_id = _detect_device()
+
+    # Pre-scan assets (Auto-create if missing)
+    if not os.path.exists(ASSETS_DIR):
+        try: 
+            os.makedirs(ASSETS_DIR, exist_ok=True)
+            with open(os.path.join(ASSETS_DIR, "put your videos here.txt"), "w") as f:
+                f.write("Place your video files (.mp4, .avi, etc.) in this folder to have them show up in the app dropdown.")
+        except: pass
+
+    afiles = []
+    try:
+        if os.path.isdir(ASSETS_DIR):
+            all_f = os.listdir(ASSETS_DIR)
+            afiles = sorted([str(f) for f in all_f if f.lower().endswith(('.mp4','.avi','.mkv','.mov'))])
+            if len(afiles) > 6: afiles = afiles[:6]
+    except: pass
 
     st = {
         "video": DEFAULT_VIDEO,
         "model": 2,
         "mode": 0,
+        "imgsz": 640,
+        "conf": 0.35,
+        "point": "center",
+        "augment": False,
         "save": True,
         "start": False
     }
@@ -128,56 +191,134 @@ def settings_screen():
         if ev==cv2.EVENT_LBUTTONDOWN: mouse["dn"]=True
     cv2.setMouseCallback(WIN,on_mouse)
 
-    def render(hm,hmo,hv):
+    def render(hm,hmo,help_msg=""):
         img=np.full((SH,SW,3),_BG,dtype=np.uint8)
         
         # Header
         cv2.rectangle(img,(0,0),(SW,65),_CARD,-1)
         cv2.line(img,(0,65),(SW,65),_ACC,1)
         _puttext(img,"CV-COUNT",(25,45),0.95,_ACC,bold=True)
-        _puttext(img,"Interactive Line Counter  |  v1.2",(175,42),0.42,_MUT)
+        _puttext(img,"Interactive Line Counter  |  v1.3",(175,42),0.42,_MUT)
+        
+        # Acceleration Banner
+        tx = SW - 350
+        cv2.rectangle(img,(tx-10,12),(SW-25,52),(0,40,45) if device_id!="cpu" else (10,10,25),-1)
+        cv2.rectangle(img,(tx-10,12),(SW-25,52),_GRN if device_id!="cpu" else (50,50,60),1)
+        _puttext(img,"ACCEL:",(tx,35),0.35,_MUT)
+        _puttext(img,hw_label,(tx+55,35),0.40,_GRN if device_id!="cpu" else (80,80,220),bold=device_id!="cpu")
 
         def _sec(y,lbl):
             cv2.rectangle(img,(25,y),(SW-25,y+24),_CARD,-1)
             _puttext(img,lbl,(34,y+18),0.44,_ACC,bold=True)
 
-        # ───────────────── VIDEO SECTION ─────────────────
-        _sec(85, "VIDEO SOURCE")
-        v_h = _in_rect(mouse["x"], mouse["y"], 35, 120, SW-70, 42)
-        cv2.rectangle(img, (35,120), (SW-35,162), _HOV if v_h else _BG, -1)
-        cv2.rectangle(img, (35,120), (SW-35,162), _MUT if not v_h else _ACC, 1)
-        v_lbl = os.path.basename(st["video"]) if st["video"] else "CLICK TO SELECT VIDEO"
-        _puttext(img, v_lbl, (55, 147), 0.52, _WHITE if v_h else _TXT)
-        _puttext(img, "(Click to change file)", (SW-165, 147), 0.38, _MUT)
+        # ───────────────── SOURCE SELECTION ──────────────
+        _sec(85, "INPUT SOURCE (ASSETS / CAMERA / EXTERNAL)")
+        # ... (assets logic remains) ...
+        cv2.rectangle(img,(35,120),(450,225),_CARD,-1); cv2.rectangle(img,(35,120),(450,225),_MUT,1)
+        _puttext(img,"FOLDER: assets/",(45,138),0.35,_MUT)
+        for i,f in enumerate(afiles):
+            fy=152+i*18
+            sel=st["video"]==os.path.join(ASSETS_DIR,f)
+            if sel: cv2.rectangle(img,(40,fy-13),(445,fy+2),_SEL,-1)
+            _puttext(img,f[:45],(50,fy),0.38,_WHITE if sel else _TXT)
+        
+        # Camera & Browse
+        _puttext(img,"LIVE CAMERAS:",(475,138),0.35,_MUT)
+        for i in range(3):
+            rx=475+i*85
+            sel=st["video"]==i
+            cv2.rectangle(img,(rx,150),(rx+75,182),_SEL if sel else _CARD,-1)
+            cv2.rectangle(img,(rx,150),(rx+75,182),_ACC if sel else _MUT,1)
+            _puttext(img,f"CAM {i}",(rx+15,172),0.40,_WHITE if sel else _TXT)
+            
+        bx,by=475,195
+        hv_b = _in_rect(mouse["x"],mouse["y"],bx,by,SW-bx-35,30)
+        cv2.rectangle(img,(bx,by),(SW-35,by+30),_HOV if hv_b else _CARD,-1)
+        cv2.rectangle(img,(bx,by),(SW-35,by+30),_ACC if hv_b else _MUT,1)
+        _puttext(img,"BROWSE OTHER FOLDERS...",(bx+25,by+21),0.42,_WHITE if hv_b else _TXT)
+
+        # Current Source Label
+        if isinstance(st['video'], int):
+            slbl = f"SELECTED: Camera {st['video']}"
+        else:
+            v_name = os.path.basename(str(st['video']))
+            slbl = f"SELECTED: {v_name}"
+        
+        slbl_s = str(slbl)
+        if len(slbl_s) > 95: slbl_s = slbl_s[:95]
+        _puttext(img,slbl_s,(35,245),0.40,_GRN)
 
         # ───────────────── MODEL SECTION ─────────────────
-        _sec(185, "DETECTION MODEL")
-        RH=35
+        _sec(285, "DETECTION MODEL")
+        RH=35; CW=(SW-70)//2
         for i,(lbl,fn) in enumerate(_MODELS):
-            ry=220+i*RH
+            col, row = i%2, i//2
+            rx, ry = 35 + col*CW, 320 + row*RH
             selected=i==st["model"]; hovered=i==hm and not selected
             bg=_SEL if selected else (_HOV if hovered else _BG)
-            cv2.rectangle(img,(35,ry),(SW-35,ry+RH-2),bg,-1)
-            bx,bc=55,ry+RH//2
+            cv2.rectangle(img,(rx,ry),(rx+CW-5,ry+RH-2),bg,-1)
+            bx,bc=rx+20,ry+RH//2
             if selected: 
                 cv2.circle(img,(bx,bc),8,_ACC,-1); cv2.circle(img,(bx,bc),4,_BG,-1)
             else: 
                 cv2.circle(img,(bx,bc),8,_MUT,1)
-            _puttext(img,lbl,(75,ry+RH//2+6),0.50,(255,255,255) if selected else _TXT)
+            _puttext(img,lbl,(rx+40,ry+RH//2+6),0.48, _WHITE if selected else _TXT)
             
             # Tags
-            tx=75+len(lbl)*10+10
+            tx=rx+40+len(str(lbl))*10+5
             if _mdl_cached(fn):
-                cv2.rectangle(img,(tx,ry+8),(tx+65,ry+RH-10),(0,65,30),-1)
-                _puttext(img,"CACHED",(tx+6,ry+RH-13),0.35,_GRN)
+                cv2.rectangle(img,(tx,ry+8),(tx+55,ry+RH-10),(0,65,30),-1)
+                _puttext(img,"CACHED",(tx+4,ry+RH-13),0.32,_GRN)
             elif fn in _LATEST:
-                cv2.rectangle(img,(tx,ry+8),(tx+65,ry+RH-10),(0,45,75),-1)
-                _puttext(img,"LATEST",(tx+6,ry+RH-13),0.35,_ACC)
+                cv2.rectangle(img,(tx,ry+8),(tx+55,ry+RH-10),(0,45,75),-1)
+                _puttext(img,"LATEST",(tx+4,ry+RH-13),0.32,_ACC)
+
+        # ───────────────── DETECTION SETTINGS ────────────
+        _sec(485, "OPTIMIZATION & QUALITY")  # SHIFTED DOWN
+        # Resolution
+        _puttext(img,"Detection Res:",(35,535),0.42,_MUT)
+        res_opts = [320, 640, 1280]
+        for i,rv in enumerate(res_opts):
+            rx=160+i*110
+            sel=st["imgsz"]==rv
+            cv2.rectangle(img,(rx,518),(rx+100,548),_SEL if sel else _CARD,-1)
+            cv2.rectangle(img,(rx,518),(rx+100,548),_ACC if sel else _MUT,1)
+            _puttext(img,f"{rv}px",(rx+22,538),0.42,_WHITE if sel else _TXT)
+
+        # Confidence
+        _puttext(img,"Confidence:",(520,535),0.42,_MUT)
+        conf_opts = [0.20, 0.35, 0.50]
+        for i,cv in enumerate(conf_opts):
+            rx=620+i*80
+            sel=abs(st["conf"]-cv)<0.01
+            cv2.rectangle(img,(rx,518),(rx+70,548),_SEL if sel else _CARD,-1)
+            cv2.rectangle(img,(rx,518),(rx+70,548),_ACC if sel else _MUT,1)
+            _puttext(img,f"{cv:.2f}",(rx+15,538),0.42,_WHITE if sel else _TXT)
+
+        # Counting Point & Augment
+        _sec(585, "ANGLE & POSE SUPPORT")  # SHIFTED DOWN
+        # Point
+        _puttext(img,"Counting Point:",(35,635),0.42,_MUT)
+        for i,pv in enumerate(["center","base"]):
+            rx=165+i*125
+            sel=st["point"]==pv
+            lbl="CENTER" if pv=="center" else "BASE (FEET)"
+            cv2.rectangle(img,(rx,618),(rx+115,648),_SEL if sel else _CARD,-1)
+            cv2.rectangle(img,(rx,618),(rx+115,648),_ACC if sel else _MUT,1)
+            _puttext(img,lbl,(rx+12,637),0.38,_WHITE if sel else _TXT)
+        _puttext(img,"(Use CENTER for top-down shots)",(165,662),0.32,_MUT)
+        
+        # Augment
+        _puttext(img,"Advanced Angle Support:",(500,635),0.42,_MUT)
+        ax=715
+        cv2.rectangle(img,(ax,618),(SW-35,648),_SEL if st["augment"] else _CARD,-1)
+        cv2.rectangle(img,(ax,618),(SW-35,648),_ACC if st["augment"] else _MUT,1)
+        _puttext(img,"ENHANCED (TTA)" if st["augment"] else "STANDARD (OFF)",(ax+15,637),0.38,_GRN if st["augment"] else _MUT)
 
         # ───────────────── MODE SECTION ──────────────────
-        _sec(515, "COUNTING RULES")
+        _sec(705, "COUNTING RULES")  # SHIFTED DOWN
         for i,(lbl,_) in enumerate(_MODES):
-            ry=550+i*RH
+            ry=740+i*RH
             selected=i==st["mode"]; hovered=i==hmo and not selected
             bg=_SEL if selected else (_HOV if hovered else _BG)
             cv2.rectangle(img,(35,ry),(SW-35,ry+RH-2),bg,-1)
@@ -186,11 +327,11 @@ def settings_screen():
                 cv2.circle(img,(bx,bc),8,_ACC,-1); cv2.circle(img,(bx,bc),4,_BG,-1)
             else: 
                 cv2.circle(img,(bx,bc),8,_MUT,1)
-            _puttext(img,lbl,(75,ry+RH//2+6),0.50,(255,255,255) if selected else _TXT)
+            _puttext(img,lbl,(75,ry+RH//2+6),0.50,_WHITE if selected else _TXT)
 
         # ───────────────── SAVE SECTION ──────────────────
-        _sec(670, "SAVE OPTIONS")
-        yb=705
+        _sec(860, "SAVE OPTIONS")  # SHIFTED DOWN
+        yb=895
         yc=_SEL if st["save"] else _CARD
         nc=(60,35,70) if not st["save"] else _CARD
         cv2.rectangle(img,(45,yb),(155,yb+32),yc,-1)
@@ -202,43 +343,86 @@ def settings_screen():
         _puttext(img,"NO SAVE",(195,yb+23),0.42,(180,80,180) if not st["save"] else _MUT)
 
         # ───────────────── START BUTTON ──────────────────
-        STBY=SH-85
-        hs=_in_rect(mouse["x"],mouse["y"],SW//2-130,STBY,260,58)
-        cv2.rectangle(img,(SW//2-130,STBY),(SW//2+130,STBY+58),(0,180,95) if hs else (0,150,80),-1)
-        cv2.rectangle(img,(SW//2-130,STBY),(SW//2+130,STBY+58),_GRN,1)
-        _puttext(img,"LAUNCH PROJECT",(SW//2-88,STBY+37),0.68,_WHITE,bold=True)
+        STBY=SH-92
+        hs=_in_rect(mouse["x"],mouse["y"],SW//2-130,STBY,260,65)
+        # Pulse-style glow
+        import time
+        glow = int(10 * np.sin(time.time()*4)) + 10
+        cv2.rectangle(img,(SW//2-130,STBY),(SW//2+130,STBY+65),_ACC,-1)
+        if hs: cv2.rectangle(img,(SW//2-135,STBY-2),(SW//2+135,STBY+67),_WHITE,2)
+        _puttext(img,"LAUNCH PROJECT",(SW//2-92,STBY+42),0.72,_WHITE,bold=True)
 
-        _puttext(img,"Q/Esc to exit  |  Auto-downloads models as needed",(25,SH-15),0.36,_MUT)
+        # Help Tooltip Area
+        cv2.rectangle(img,(0,SH-30),(SW,SH),_CARD,-1)
+        _puttext(img,help_msg if help_msg else "Q/Esc to exit  |  Interactive People Counting v1.6",(25,SH-10),0.36,_MUT if not help_msg else _INF)
         return img
 
     while True:
+        # Check if window was closed via [X]
+        if cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
+            cv2.destroyAllWindows(); sys.exit(0)
+
         mx,my=mouse["x"],mouse["y"]
-        hm=-1
+        hm, hmo = -1, -1
+        help_msg = ""
+        CW=(SW-70)//2
+        
+        # Hover Detection & Tooltips
+        if _in_rect(mx,my,25,85,SW-50,180): help_msg = "Select a video from assets, a live camera, or browse your PC."
+        
         for i in range(len(_MODELS)):
-            if _in_rect(mx,my,35,220+i*35,SW-70,33): hm=i; break
-        hmo=-1
+            col, row = i%2, i//2
+            if _in_rect(mx,my,35+col*CW,320+row*35,CW-5,33): 
+                hm=i; help_msg = f"Use {_MODELS[i][0]} for optimized counting."
+                break
+        
+        if _in_rect(mx,my,25,485,SW-50,80): help_msg = "Resolution: 320 (Fastest) -> 1280 (High Detail). Confidence: Filter noise."
+        if _in_rect(mx,my,25,585,SW-50,100): help_msg = "Center: Ideal for Top-Down cameras. Base: Ideal for ground-level views."
+        
         for i in range(len(_MODES)):
-            if _in_rect(mx,my,35,550+i*35,SW-70,33): hmo=i; break
-        hv = _in_rect(mx,my,35,120,SW-70,42)
+            if _in_rect(mx,my,35,740+i*35,SW-70,33): 
+                hmo=i; help_msg = "Choose how movements are tracked: Sum, Subtract (Net), or One-Way."
+                break
+        
+        hv_b = _in_rect(mx,my,475,195,SW-475-35,30)
 
         if mouse["dn"]:
             mouse["dn"]=False
-            if hv:
+            # Assets clicks
+            for i,f in enumerate(afiles):
+                if _in_rect(mx,my,35,140+i*18,485,18): st["video"]=os.path.join(ASSETS_DIR,f)
+            # Camera clicks
+            for i in range(3):
+                if _in_rect(mx,my,475+i*85,150,75,32): st["video"]=i
+            # Browse click
+            if hv_b:
                 new_v = pick_file()
                 if new_v: st["video"]=new_v
+            
             elif hm>=0: st["model"]=hm
             elif hmo>=0: st["mode"]=hmo
-            elif _in_rect(mx,my,45,705,110,32):  st["save"]=True
-            elif _in_rect(mx,my,170,705,110,32): st["save"]=False
-            elif _in_rect(mx,my,SW//2-130,SH-85,260,58): st["start"]=True
+            elif _in_rect(mx,my,45,895,110,32):  st["save"]=True
+            elif _in_rect(mx,my,170,895,110,32): st["save"]=False
+            elif _in_rect(mx,my,SW//2-130,SH-92,260,65): st["start"]=True
+            else:
+                # Resolution & Confidence clicks
+                for i,rv in enumerate([320,640,1280]):
+                    if _in_rect(mx,my,160+i*110,518,100,32): st["imgsz"]=rv
+                for i,cv in enumerate([0.20,0.35,0.50]):
+                    if _in_rect(mx,my,620+i*80,518,70,32): st["conf"]=cv
+                # Point clicks
+                for i,pv in enumerate(["center","base"]):
+                    if _in_rect(mx,my,165+i*125,618,115,30): st["point"]=pv
+                # Augment click
+                if _in_rect(mx,my,715,618,150,30): st["augment"]=not st["augment"]
 
-        cv2.imshow(WIN,render(hm,hmo,hv))
-        key=cv2.waitKey(15)&0xFF
+        cv2.imshow(WIN,render(hm,hmo,help_msg))
+        key=cv2.waitKey(20)&0xFF
         if key in (ord('q'),27): cv2.destroyAllWindows(); sys.exit(0)
         if st["start"]: break
 
     cv2.destroyWindow(WIN)
-    return st["video"], _MODELS[st["model"]][1], _MODES[st["mode"]][1], st["save"]
+    return st["video"], _MODELS[int(st["model"])][1], _MODES[int(st["mode"])][1], st["save"], int(st["imgsz"]), float(st["conf"]), device_id, st["point"], st["augment"]
 
 
 # ─────────────────────── common drawing ───────────────────────────────────────
@@ -278,7 +462,7 @@ def _draw_hud(frame, counting_lines, count_mode, zone_active):
     cv2.addWeighted(ov,HUD_ALPHA,frame,1-HUD_ALPHA,0,frame)
     _puttext(frame, "CV-COUNT DASHBOARD", (20, 32), 0.45, _ACC, bold=True)
     
-    yc=65; grand=0
+    yc=int(65); grand=0
     if zone_active:
         _puttext(frame, "ZONE MASK: ACTIVE", (20, yc), 0.4, _GRN); yc+=32
         
@@ -300,13 +484,14 @@ def _draw_hud(frame, counting_lines, count_mode, zone_active):
 # ─────────────────────── main ─────────────────────────────────────────────────
 
 def main():
-    video_path, model_name, count_mode, do_save = settings_screen()
+    video_path, model_name, count_mode, do_save, imgsz, conf, dev_id, poi_type, use_aug = settings_screen()
 
     # Model load
     os.makedirs(MODELS_DIR, exist_ok=True)
     mp = model_name if os.path.isabs(model_name) else os.path.join(MODELS_DIR, model_name)
     _orig = os.getcwd(); os.chdir(MODELS_DIR)
     model = YOLO(os.path.basename(mp))
+    if dev_id != "cpu": model.to(dev_id)
     os.chdir(_orig)
 
     cap = cv2.VideoCapture(video_path)
@@ -314,14 +499,16 @@ def main():
     fw, fh = int(cap.get(3)), int(cap.get(4))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     totf = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    is_live = totf <= 0
     
     scale = min(MAX_WIN_W/fw, MAX_WIN_H/fh, 1.0)
     dw, dh = int(fw*scale), int(fh*scale)
 
     writer = None
     if do_save:
+        os.makedirs(ASSETS_DIR, exist_ok=True)
         base = os.path.splitext(os.path.basename(video_path))[0]
-        outp = f"{base}_counted.mp4"
+        outp = os.path.join(ASSETS_DIR, f"{base}_counted.mp4")
         writer = cv2.VideoWriter(outp, cv2.VideoWriter_fourcc(*"mp4v"), fps, (fw,fh))
 
     # state
@@ -335,6 +522,8 @@ def main():
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN, dw, dh)
 
+    # Mouse Callback: We store coordinates at Display Resolution (dw, dh)
+    # and scale them up to Full Resolution (fw, fh) later.
     def on_m(ev,x,y,fl,_):
         nonlocal zone_drawing, line_drawing, draw_start
         mouse_pos[0], mouse_pos[1] = x, y
@@ -348,8 +537,10 @@ def main():
                     draw_start=None; line_drawing=False
     cv2.setMouseCallback(WIN, on_m)
 
-    # Setup Phase
-    ret, frame1 = cap.read()
+    # Setup Phase on a resized frame so coordinates match exactly
+    ret, frame1_orig = cap.read()
+    if not ret: sys.exit("[ERROR] Cannot read first frame of video.")
+    frame1 = cv2.resize(frame1_orig, (dw, dh))
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     
     while True:
@@ -360,8 +551,12 @@ def main():
             cv2.circle(f,draw_start,6,(0,255,255),-1)
             _puttext(f,"Click P2",(draw_start[0]+12,draw_start[1]-12),0.5,(0,255,255))
         
-        banner = " SETUP: [N] Draw Line  |  [Z] Draw Zone  |  [SPACE] Start "
-        _puttext(f, banner, (20, fh-25), 0.65, _ACC, bold=True)
+        mode_lbl = "MODE: ZONE (CLICK FOR POLYGON)" if zone_drawing else ("MODE: LINE (CLICK 2 POINTS)" if line_drawing else "MODE: READY (SELECT BELOW)")
+        banner = f" [{mode_lbl}] -- [N] Line | [Z] Zone | [F] Flip | [Backspace] Undo | [C] Clear | [SPACE] Start "
+        
+        cv2.rectangle(f, (0, dh-40), (dw, dh), (0,0,0), -1)
+        _puttext(f, banner, (15, dh-15), 0.44, _WHITE, bold=True)
+        if is_live: _puttext(f, "LIVE CAMERA FEED", (dw-160, 32), 0.4, (0,100,255), bold=True)
         
         cv2.imshow(WIN, f)
         k = cv2.waitKey(20)&0xFF
@@ -370,10 +565,27 @@ def main():
         elif k==ord('z'): 
             if zone_drawing and len(zone_poly)>=3: zone_drawing=False
             else: zone_drawing=True; line_drawing=False
+        elif k==ord('f'):
+            if counting_lines:
+                ln = counting_lines[-1]
+                ln["p1"], ln["p2"] = ln["p2"], ln["p1"]
+        elif k in (8, 255): # Backspace or Delete
+            if zone_drawing and zone_poly: zone_poly.pop()
+            elif counting_lines: counting_lines.pop()
+            elif zone_poly: zone_poly.pop()
         elif k==ord('x'): zone_poly.clear(); zone_drawing=False
         elif k==ord('c'): counting_lines.clear(); zone_poly.clear()
         elif k==ord(' '):
-            if counting_lines: break
+            if counting_lines or zone_poly: break
+
+    # Final Step: Scale points from Display (dw, dh) to Full Res (fw, fh)
+    sx, sy = fw/dw, fh/dh
+    for ln in counting_lines:
+        x1, y1 = ln["p1"]
+        x2, y2 = ln["p2"]
+        ln["p1"] = (int(x1*sx), int(y1*sy))
+        ln["p2"] = (int(x2*sx), int(y2*sy))
+    zone_poly = [(int(p[0]*sx), int(p[1]*sy)) for p in zone_poly]
 
     # Process Phase
     paused, frame_idx, last_f = False, 0, None
@@ -387,14 +599,15 @@ def main():
         else: frame = last_f.copy()
 
         if not paused:
-            res = model.track(frame, conf=CONF, iou=IOU, persist=True, tracker=TRACKER, verbose=False, classes=CLASSES)
+            # OPTIMIZATION: Detection on resized resolution (imgsz), overlapping results back to full res.
+            res = model.track(frame, imgsz=imgsz, conf=conf, iou=IOU, persist=True, tracker=TRACKER, verbose=False, classes=CLASSES, device=dev_id, augment=use_aug)
             if zone_active: _draw_zone(frame, zone_poly)
             
             if res and res[0].boxes is not None:
                 for b in res[0].boxes:
                     xy = b.xyxy[0].cpu().numpy().astype(int)
                     tid = int(b.id[0]) if b.id is not None else -1
-                    cx, cy = _centroid(xy)
+                    cx, cy = _get_poi(xy, poi_type)
                     inside = _inside_zone((cx,cy), zone_poly)
                     
                     cv2.rectangle(frame, (xy[0],xy[1]), (xy[2],xy[3]), _GRN if inside else (50,50,220), 1)

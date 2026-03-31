@@ -1,0 +1,30 @@
+====================================================
+  CV-COUNT -- QUICK START GUIDE
+====================================================
+
+1. INSTALLATION
+   Run: "02. Setup (Run first).bat"
+   This will install all necessary Python libraries.
+
+2. STARTING THE APP
+   Run: "03. Start CV Count App (Run after 02).bat"
+
+3. SETTINGS
+   - Use your mouse to pick a video, model, and resolution.
+   - Click "LAUNCH" to start.
+
+4. SETUP (ON FIRST FRAME)
+   - [N] Draw Line: Click two points to create a crossing line.
+   - [Z] Draw Zone: Click multiple points to create a restricted counting area.
+   - [F] Flip: Swaps the IN/OUT direction of the last line.
+   - [Backspace] Undo: Removes the last point or line.
+   - [C] Clear All
+   - [SPACE] Start Counting
+
+5. PROCESSING
+   - Tracks people live through your lines/zones.
+   - Grand totals are shown in the persistent HUD.
+   - Settings for top-down shots and high-res optimization are in the main menu.
+
+Refer to README.md for technical details and shortcuts.
+====================================================
