@@ -1,30 +1,37 @@
-====================================================
-  CV-COUNT -- QUICK START GUIDE
-====================================================
+CV-COUNT Walkthrough & Guide (v1.6)
+==================================================
 
 1. INSTALLATION
    Run: "02. Setup (Run first).bat"
-   This will install all necessary Python libraries.
+   - This "Smart Installer" will scan your system hardware.
+   - NVIDIA GPU: Offers to install the 2.6GB CUDA package.
+   - Apple Silicon (M1/M2/M3): Automatically configures Metal (MPS) support.
+   - It also handles all other libraries and the assets folder automatically.
 
 2. STARTING THE APP
    Run: "03. Start CV Count App (Run after 02).bat"
 
-3. SETTINGS
-   - Use your mouse to pick a video, model, and resolution.
-   - Click "LAUNCH" to start.
+3. NEW USER INTERFACE (UX)
+   - Home Screen: Professional Slate (Dark Mode) & Emerald Green.
+   - Animations: Look for the pulsing "LAUNCH" button and hover effects.
+   - Tooltips: Hover over any setting in the menu to see a description in the bar at the bottom.
+   - Close Button: You can now click the standard "X" on the window to exit.
 
-4. SETUP (ON FIRST FRAME)
-   - [N] Draw Line: Click two points to create a crossing line.
-   - [Z] Draw Zone: Click multiple points to create a restricted counting area.
-   - [F] Flip: Swaps the IN/OUT direction of the last line.
-   - [Backspace] Undo: Removes the last point or line.
-   - [C] Clear All
-   - [SPACE] Start Counting
+4. DRAWING CONTROLS (Setup Phase)
+   - PRESS [N]: To draw a LINE. (Click 2 points)
+   - PRESS [Z]: To draw a ZONE (Polygon). (Click multiple points)
+   - PRESS [Backspace]: To undo the last point.
+   - PRESS [SPACE]: To START COUNTING.
+   - Drawing is "Pixel Perfect" -- click exactly where you want on your screen, no matter your video's resolution.
 
-5. PROCESSING
-   - Tracks people live through your lines/zones.
-   - Grand totals are shown in the persistent HUD.
-   - Settings for top-down shots and high-res optimization are in the main menu.
+5. ASSETS
+   - Place your videos in the "assets/" folder.
+   - Counted videos are also saved here by default.
 
-Refer to README.md for technical details and shortcuts.
-====================================================
+6. HARDWARE
+   - NVIDIA GPU support via CUDA.
+   - Apple Silicon support via Metal (MPS).
+
+==================================================
+Interactive People Counting v1.6 (Final Release)
+==================================================

@@ -131,9 +131,9 @@ _MODES = [
 _LATEST = {"yolo26n.pt","yolo26s.pt","yolo26m.pt","yolo26l.pt","yolo26x.pt"}
 
 # 🎨 THEME: SLATE & EMERALD
-_BG=(15,12,10); _CARD=(28,24,20); _ACC=(129,185,16); _INF=(212,182,6); _GRN=(80,210,120)
-_SEL=(60,45,20); _HOV=(45,35,25); _WHITE=(252,250,248); _MUT=(148,115,100); _RED=(70,70,225)
-_TXT=(215,215,225)
+_BG=(15,12,10); _CARD=(28,24,20); _ACC=(129,185,16); _INF=(212,182,6); _GRN=(0,255,0)
+_SEL=(60,45,20); _HOV=(45,35,25); _WHITE=(252,250,248); _MUT=(148,115,100); _RED=(0,0,255)
+_YEL=(0,255,255); _BLU=(255,150,0); _TXT=(215,215,225)
 
 def _mdl_cached(fn):
     return os.path.isfile(os.path.join(MODELS_DIR,fn)) or (os.path.isabs(fn) and os.path.isfile(fn))
@@ -430,24 +430,51 @@ def settings_screen():
 def _draw_zone(img, zone_poly, in_progress=False, cursor=None):
     if not zone_poly: return
     pts = np.array(zone_poly, dtype=np.int32)
+    # Emerald Green styling
     if not in_progress and len(pts) >= 3:
         ov = img.copy()
-        cv2.fillPoly(ov, [pts], (0,80,20))
-        cv2.addWeighted(ov, 0.35, img, 0.65, 0, img)
-        cv2.polylines(img, [pts], True, (0,230,100), 2, cv2.LINE_AA)
+        cv2.fillPoly(ov, [pts], _GRN)
+        cv2.addWeighted(ov, 0.15, img, 0.85, 0, img)
+        cv2.polylines(img, [pts], True, _GRN, 2, cv2.LINE_AA)
     else:
         for i in range(len(pts)-1):
-            cv2.line(img, tuple(pts[i]), tuple(pts[i+1]), (0,200,80), 2, cv2.LINE_AA)
+            cv2.line(img, tuple(pts[i]), tuple(pts[i+1]), _GRN, 2, cv2.LINE_AA)
         if cursor and len(pts)>0:
-            cv2.line(img, tuple(pts[-1]), cursor, (0,200,80), 1, cv2.LINE_AA)
+            cv2.line(img, tuple(pts[-1]), cursor, _GRN, 1, cv2.LINE_AA)
     for p in zone_poly:
-        cv2.circle(img, p, 5, (0,250,110), -1)
+        cv2.circle(img, p, 5, _WHITE, -1)
 
-def _draw_lines(img, counting_lines):
+def _draw_lines(img, counting_lines, hover_idx=-1):
     for i, ln in enumerate(counting_lines):
-        a,b = ln["p1"],ln["p2"]
-        cv2.line(img,a,b,ln["color"],LINE_THICKNESS,cv2.LINE_AA)
-        mid = ((a[0]+b[0])//2,(a[1]+b[1])//2)
+        a, b = ln["p1"], ln["p2"]
+        # Yellow line with highlight if hovered
+        color = _YEL
+        thick = LINE_THICKNESS + (2 if i == hover_idx else 0)
+        cv2.line(img, a, b, color, thick, cv2.LINE_AA)
+        cv2.circle(img, a, 5, color, -1)
+        cv2.circle(img, b, 5, color, -1)
+        
+        # Bi-Color Directional Arrows
+        mid = ((a[0]+b[0])//2, (a[1]+b[1])//2)
+        dx, dy = b[0]-a[0], b[1]-a[1]
+        mag = np.sqrt(dx**2 + dy**2)
+        if mag > 0:
+            # Perpendicular vector for IN/OUT markers
+            nx, ny = -dy/mag, dx/mag
+            off = 25
+            
+            # IN direction (P1 to P2 right-side)
+            in_p = (int(mid[0] + nx*off), int(mid[1] + ny*off))
+            cv2.arrowedLine(img, mid, in_p, _GRN, 2, tipLength=0.4)
+            _puttext(img, "IN", (in_p[0]+5, in_p[1]), 0.35, _GRN, bold=True)
+            
+            # OUT direction
+            out_p = (int(mid[0] - nx*off), int(mid[1] - ny*off))
+            cv2.arrowedLine(img, mid, out_p, _RED, 2, tipLength=0.4)
+            _puttext(img, "OUT", (out_p[0]+5, out_p[1]), 0.35, _RED, bold=True)
+            
+        # Line Number Label
+        _puttext(img, f"#{i+1}", (a[0]+10, a[1]-10), 0.45, _YEL, bold=True)
         dx,dy = b[0]-a[0],b[1]-a[1]
         L = max((dx**2+dy**2)**0.5,1)
         nx,ny = int(-dy/L*20),int(dx/L*20)
@@ -522,70 +549,91 @@ def main():
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN, dw, dh)
 
-    # Mouse Callback: We store coordinates at Display Resolution (dw, dh)
-    # and scale them up to Full Resolution (fw, fh) later.
+    # Setup Phase on a high-fidelity original frame
+    ret, frame1 = cap.read()
+    if not ret: sys.exit("[ERROR] Cannot read first frame of video.")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
     def on_m(ev,x,y,fl,_):
         nonlocal zone_drawing, line_drawing, draw_start
-        mouse_pos[0], mouse_pos[1] = x, y
-        if ev==cv2.EVENT_LBUTTONDOWN:
-            if zone_drawing: zone_poly.append((x,y))
+        rx = int(x * (fw / dw))
+        ry = int(y * (fh / dh))
+        mouse_pos[0], mouse_pos[1] = rx, ry
+        
+        if ev == cv2.EVENT_LBUTTONDOWN:
+            if zone_drawing:
+                zone_poly.append((rx,ry))
             elif line_drawing:
-                if draw_start is None: draw_start=(x,y)
+                if draw_start is None:
+                    draw_start=(rx,ry)
                 else:
-                    c=_PALETTE[len(counting_lines)%len(_PALETTE)]
-                    counting_lines.append({"p1":draw_start,"p2":(x,y),"color":c,"in":0,"out":0})
-                    draw_start=None; line_drawing=False
+                    counting_lines.append({"p1":draw_start, "p2":(rx,ry), "in":0, "out":0})
+                    draw_start = None # Stay in line mode
+        elif ev == cv2.EVENT_LBUTTONDBLCLK:
+            if zone_drawing and len(zone_poly) >= 3:
+                zone_drawing = False
     cv2.setMouseCallback(WIN, on_m)
-
-    # Setup Phase on a resized frame so coordinates match exactly
-    ret, frame1_orig = cap.read()
-    if not ret: sys.exit("[ERROR] Cannot read first frame of video.")
-    frame1 = cv2.resize(frame1_orig, (dw, dh))
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     
     while True:
         f = frame1.copy()
+        
+        # Smart Hover: Identify closest line for Smart Flip (F)
+        mx, my = mouse_pos
+        hover_idx = -1
+        if not (zone_drawing or line_drawing) and counting_lines:
+            best_d = 50 # Max distance to be considered "hovered"
+            for i, ln in enumerate(counting_lines):
+                ax, ay = ln["p1"]
+                bx, by = ln["p2"]
+                midx, midy = (ax+bx)/2, (ay+by)/2
+                d = np.sqrt((mx-midx)**2 + (my-midy)**2)
+                if d < best_d:
+                    best_d, hover_idx = d, i
+
         _draw_zone(f, zone_poly, zone_drawing, tuple(mouse_pos))
-        _draw_lines(f, counting_lines)
+        _draw_lines(f, counting_lines, hover_idx)
+        
+        # Visual crosshair
+        cv2.drawMarker(f, (mx,my), _WHITE, cv2.MARKER_CROSS, 20, 1)
+
         if line_drawing and draw_start:
-            cv2.circle(f,draw_start,6,(0,255,255),-1)
-            _puttext(f,"Click P2",(draw_start[0]+12,draw_start[1]-12),0.5,(0,255,255))
+            cv2.circle(f, draw_start, 8, _YEL, -1)
+            _puttext(f, "CLICK FOR END POINT", (int(draw_start[0]+15), int(draw_start[1]-15)), 0.65, _YEL, bold=True)
         
-        mode_lbl = "MODE: ZONE (CLICK FOR POLYGON)" if zone_drawing else ("MODE: LINE (CLICK 2 POINTS)" if line_drawing else "MODE: READY (SELECT BELOW)")
-        banner = f" [{mode_lbl}] -- [N] Line | [Z] Zone | [F] Flip | [Backspace] Undo | [C] Clear | [SPACE] Start "
+        # Banner UI
+        bh = fh // 20
+        banner_bg = _BLU
+        if zone_drawing: banner_bg = _GRN
+        elif line_drawing: banner_bg = _YEL
         
-        cv2.rectangle(f, (0, dh-40), (dw, dh), (0,0,0), -1)
-        _puttext(f, banner, (15, dh-15), 0.44, _WHITE, bold=True)
-        if is_live: _puttext(f, "LIVE CAMERA FEED", (dw-160, 32), 0.4, (0,100,255), bold=True)
+        cv2.rectangle(f, (0, fh-bh), (fw, fh), banner_bg, -1)
         
-        cv2.imshow(WIN, f)
-        k = cv2.waitKey(20)&0xFF
-        if k in (ord('q'),27): return
+        mod = "ZONE (DBL-CLICK TO FINISH)" if zone_drawing else ("LINE (CONTINUOUS)" if line_drawing else "READY")
+        banner = f" [{mod}] -- [N] Line | [Z] Zone | [F] Flip Line under Mouse | [C] CLEAR | [SPACE] START "
+        _puttext(f, banner, (30, fh - (bh//2) + 12), 0.75 * (fh/1080), _BG if line_drawing else _WHITE, bold=True)
+        
+        cv2.imshow(WIN, cv2.resize(f, (dw, dh)))
+        
+        k = cv2.waitKey(1)&0xFF
+        if k in (ord('q'), 27): return
         elif k==ord('n'): line_drawing=True; zone_drawing=False; draw_start=None
         elif k==ord('z'): 
-            if zone_drawing and len(zone_poly)>=3: zone_drawing=False
-            else: zone_drawing=True; line_drawing=False
+            if zone_drawing: zone_drawing=False # Toggle
+            else: zone_drawing=True; line_drawing=False; draw_start=None
         elif k==ord('f'):
-            if counting_lines:
-                ln = counting_lines[-1]
+            if hover_idx >= 0:
+                ln = counting_lines[hover_idx]
                 ln["p1"], ln["p2"] = ln["p2"], ln["p1"]
-        elif k in (8, 255): # Backspace or Delete
+        elif k in (8, 255): # Backspace
             if zone_drawing and zone_poly: zone_poly.pop()
             elif counting_lines: counting_lines.pop()
-            elif zone_poly: zone_poly.pop()
-        elif k==ord('x'): zone_poly.clear(); zone_drawing=False
-        elif k==ord('c'): counting_lines.clear(); zone_poly.clear()
+        elif k==ord('c'): counting_lines.clear(); zone_poly.clear(); draw_start=None
         elif k==ord(' '):
             if counting_lines or zone_poly: break
+        
+        if cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1: return
 
-    # Final Step: Scale points from Display (dw, dh) to Full Res (fw, fh)
-    sx, sy = fw/dw, fh/dh
-    for ln in counting_lines:
-        x1, y1 = ln["p1"]
-        x2, y2 = ln["p2"]
-        ln["p1"] = (int(x1*sx), int(y1*sy))
-        ln["p2"] = (int(x2*sx), int(y2*sy))
-    zone_poly = [(int(p[0]*sx), int(p[1]*sy)) for p in zone_poly]
+    # Cleanup: points are already at full resolution (fw, fh) now.
 
     # Process Phase
     paused, frame_idx, last_f = False, 0, None

@@ -17,6 +17,11 @@ def check_nvidia_gpu():
     except: pass
     return False
 
+def check_apple_silicon():
+    """Detect if the system is an Apple Silicon Mac."""
+    import platform
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
 def check_torch_cuda():
     """Check if the currently installed PyTorch already has CUDA capability."""
     try:
@@ -27,6 +32,7 @@ def check_torch_cuda():
 
 def install():
     has_gpu = check_nvidia_gpu()
+    is_apple_silicon = check_apple_silicon()
     already_cuda = check_torch_cuda()
     python = sys.executable
     
@@ -34,7 +40,11 @@ def install():
     print("  CV-COUNT SMART INSTALLER -- SCANNING HARDWARE")
     print("="*50)
     
-    if has_gpu and already_cuda:
+    if is_apple_silicon:
+        print("\n[DETECTED] Apple Silicon Mac Found! (M1/M2/M3/M4)")
+        print("[ACTION]   Ready for Apple Metal (MPS) acceleration.")
+        cmd = f"{python} -m pip install torch torchvision torchaudio" # Standard torch has MPS
+    elif has_gpu and already_cuda:
         print("\n[SUCCESS] NVIDIA GPU Detected and PyTorch is already CUDA-optimized!")
         print("[ACTION]  Skipping 2.6GB download. Using existing environment.")
         cmd = None
