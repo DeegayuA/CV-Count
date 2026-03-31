@@ -1,3 +1,4 @@
+# pyre-ignore-all-errors
 """
 CV-Count — Interactive Line-Crossing People Counter
 ====================================================
@@ -13,18 +14,18 @@ FLOW:
   3. SPACE to start counting
 """
 
-import sys, os, collections, tkinter as tk
+import sys, os, collections, time, tkinter as tk
 from tkinter import filedialog
-import cv2
-import numpy as np
+import cv2  # type: ignore
+import numpy as np  # type: ignore
 
 try:
-    from ultralytics import YOLO
+    from ultralytics import YOLO  # type: ignore
 except ImportError:
     sys.exit("[ERROR] Run: RUN_CV_COUNT.bat")
 
 try:
-    import lap  # noqa: F401
+    import lap  # type: ignore
 except ImportError:
     sys.exit("[ERROR] Run: RUN_CV_COUNT.bat")
 
@@ -33,7 +34,7 @@ except ImportError:
 
 ASSETS_DIR     = "assets"
 MODELS_DIR     = "models"
-DEFAULT_VIDEO  = os.path.join(ASSETS_DIR, "01.50fps.mp4.mp4")
+DEFAULT_VIDEO  = os.path.join(ASSETS_DIR, "01.30fps.mp4")
 CLASSES        = [0]
 CONF           = 0.35
 IOU            = 0.45
@@ -61,7 +62,7 @@ def _side(pt,a,b):
 
 def _get_poi(box, point_type="center"):
     """Get Point of Interest (PoI) for tracking."""
-    x1,y1,x2,y2 = box
+    x1, y1, x2, y2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
     if point_type == "base":
         return int((x1+x2)/2), int(y2)
     return int((x1+x2)/2), int((y1+y2)/2)
@@ -81,7 +82,7 @@ def _inside_zone(pt, zone_poly):
 def _detect_device():
     """Detect available GPU/NPU acceleration for YOLO inference."""
     try:
-        import torch
+        import torch  # type: ignore
         if torch.cuda.is_available():
             # NVIDIA CUDA
             return "NVIDIA CUDA (RTX/GTX)", "0"
@@ -170,7 +171,7 @@ def settings_screen():
         if os.path.isdir(ASSETS_DIR):
             all_f = os.listdir(ASSETS_DIR)
             afiles = sorted([str(f) for f in all_f if f.lower().endswith(('.mp4','.avi','.mkv','.mov'))])
-            if len(afiles) > 6: afiles = afiles[:6]
+            if len(afiles) > 6: afiles = afiles[:6]  # type: ignore
     except: pass
 
     st = {
@@ -213,29 +214,31 @@ def settings_screen():
 
         # ───────────────── SOURCE SELECTION ──────────────
         _sec(85, "INPUT SOURCE (ASSETS / CAMERA / EXTERNAL)")
-        # ... (assets logic remains) ...
-        cv2.rectangle(img,(35,120),(450,225),_CARD,-1); cv2.rectangle(img,(35,120),(450,225),_MUT,1)
-        _puttext(img,"FOLDER: assets/",(45,138),0.35,_MUT)
-        for i,f in enumerate(afiles):
-            fy=152+i*18
+        cv2.rectangle(img,(35,120),(SW-35,215),_CARD,-1); cv2.rectangle(img,(35,120),(SW-35,215),_MUT,1)
+        _puttext(img,"FOLDER: assets/ (Auto-detects files)",(45,138),0.35,_MUT)
+        CW_A = (SW-70)//2
+        afiles_sub = list(afiles)
+        for i,f in enumerate(afiles_sub[:8]): # type: ignore
+            col, row = i%2, i//2
+            rx, ry = 40 + col*CW_A, 153 + row*18
             sel=st["video"]==os.path.join(ASSETS_DIR,f)
-            if sel: cv2.rectangle(img,(40,fy-13),(445,fy+2),_SEL,-1)
-            _puttext(img,f[:45],(50,fy),0.38,_WHITE if sel else _TXT)
-        
-        # Camera & Browse
-        _puttext(img,"LIVE CAMERAS:",(475,138),0.35,_MUT)
-        for i in range(3):
-            rx=475+i*85
-            sel=st["video"]==i
-            cv2.rectangle(img,(rx,150),(rx+75,182),_SEL if sel else _CARD,-1)
-            cv2.rectangle(img,(rx,150),(rx+75,182),_ACC if sel else _MUT,1)
-            _puttext(img,f"CAM {i}",(rx+15,172),0.40,_WHITE if sel else _TXT)
+            if sel: cv2.rectangle(img,(rx-5,ry-13),(rx+CW_A-10,ry+2),_SEL,-1)
+            _puttext(img,f[:45],(rx+5,ry),0.38,_WHITE if sel else _TXT)
             
-        bx,by=475,195
+        # Camera & Browse underneath to use horizontal space well
+        _puttext(img,"LIVE CAMERAS:",(35, 240),0.35,_MUT)
+        for i in range(3):
+            rx=125+i*85
+            sel=st["video"]==i
+            cv2.rectangle(img,(rx,226),(rx+75,256),_SEL if sel else _CARD,-1)
+            cv2.rectangle(img,(rx,226),(rx+75,256),_ACC if sel else _MUT,1)
+            _puttext(img,f"CAM {i}",(rx+15,246),0.40,_WHITE if sel else _TXT)
+            
+        bx,by=390,226
         hv_b = _in_rect(mouse["x"],mouse["y"],bx,by,SW-bx-35,30)
         cv2.rectangle(img,(bx,by),(SW-35,by+30),_HOV if hv_b else _CARD,-1)
         cv2.rectangle(img,(bx,by),(SW-35,by+30),_ACC if hv_b else _MUT,1)
-        _puttext(img,"BROWSE OTHER FOLDERS...",(bx+25,by+21),0.42,_WHITE if hv_b else _TXT)
+        _puttext(img,"BROWSE EXPLORER...",(bx+25,by+21),0.42,_WHITE if hv_b else _TXT)
 
         # Current Source Label
         if isinstance(st['video'], int):
@@ -245,7 +248,7 @@ def settings_screen():
             slbl = f"SELECTED: {v_name}"
         
         slbl_s = str(slbl)
-        if len(slbl_s) > 95: slbl_s = slbl_s[:95]
+        if len(slbl_s) > 95: slbl_s = slbl_s[:95]  # type: ignore
         _puttext(img,slbl_s,(35,245),0.40,_GRN)
 
         # ───────────────── MODEL SECTION ─────────────────
@@ -319,7 +322,8 @@ def settings_screen():
         _sec(705, "COUNTING RULES")  # SHIFTED DOWN
         for i,(lbl,_) in enumerate(_MODES):
             ry=740+i*RH
-            selected=i==st["mode"]; hovered=i==hmo and not selected
+            selected = i == st.get("mode")
+            hovered = i == hmo and not selected
             bg=_SEL if selected else (_HOV if hovered else _BG)
             cv2.rectangle(img,(35,ry),(SW-35,ry+RH-2),bg,-1)
             bx,bc=55,ry+RH//2
@@ -328,19 +332,6 @@ def settings_screen():
             else: 
                 cv2.circle(img,(bx,bc),8,_MUT,1)
             _puttext(img,lbl,(75,ry+RH//2+6),0.50,_WHITE if selected else _TXT)
-
-        # ───────────────── SAVE SECTION ──────────────────
-        _sec(860, "SAVE OPTIONS")  # SHIFTED DOWN
-        yb=895
-        yc=_SEL if st["save"] else _CARD
-        nc=(60,35,70) if not st["save"] else _CARD
-        cv2.rectangle(img,(45,yb),(155,yb+32),yc,-1)
-        cv2.rectangle(img,(45,yb),(155,yb+32),_ACC if st["save"] else _MUT,1)
-        _puttext(img,"SAVE VIDEO",(65,yb+23),0.42,_GRN if st["save"] else _MUT)
-        
-        cv2.rectangle(img,(170,yb),(280,yb+32),nc,-1)
-        cv2.rectangle(img,(170,yb),(280,yb+32),_MUT,1)
-        _puttext(img,"NO SAVE",(195,yb+23),0.42,(180,80,180) if not st["save"] else _MUT)
 
         # ───────────────── START BUTTON ──────────────────
         STBY=SH-92
@@ -358,10 +349,6 @@ def settings_screen():
         return img
 
     while True:
-        # Check if window was closed via [X]
-        if cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1:
-            cv2.destroyAllWindows(); sys.exit(0)
-
         mx,my=mouse["x"],mouse["y"]
         hm, hmo = -1, -1
         help_msg = ""
@@ -386,14 +373,18 @@ def settings_screen():
         
         hv_b = _in_rect(mx,my,475,195,SW-475-35,30)
 
-        if mouse["dn"]:
-            mouse["dn"]=False
+        if mouse["dn"]:  # type: ignore
+            mouse["dn"]=False  # type: ignore
             # Assets clicks
-            for i,f in enumerate(afiles):
-                if _in_rect(mx,my,35,140+i*18,485,18): st["video"]=os.path.join(ASSETS_DIR,f)
+            afiles_sub2 = list(afiles)
+            for i,f in enumerate(afiles_sub2[:8]):  # type: ignore
+                col, row = i%2, i//2
+                CW_A = (SW-70)//2
+                rx, ry = 40 + col*CW_A, 153 + row*18
+                if _in_rect(mx,my,rx-5,ry-13,CW_A-10,18): st["video"]=os.path.join(ASSETS_DIR,f)
             # Camera clicks
             for i in range(3):
-                if _in_rect(mx,my,475+i*85,150,75,32): st["video"]=i
+                if _in_rect(mx,my,125+i*85,226,75,30): st["video"]=i
             # Browse click
             if hv_b:
                 new_v = pick_file()
@@ -401,9 +392,7 @@ def settings_screen():
             
             elif hm>=0: st["model"]=hm
             elif hmo>=0: st["mode"]=hmo
-            elif _in_rect(mx,my,45,895,110,32):  st["save"]=True
-            elif _in_rect(mx,my,170,895,110,32): st["save"]=False
-            elif _in_rect(mx,my,SW//2-130,SH-92,260,65): st["start"]=True
+            elif _in_rect(mx,my,SW//2-130,SH-92,260,65): st["start"]=True  # type: ignore
             else:
                 # Resolution & Confidence clicks
                 for i,rv in enumerate([320,640,1280]):
@@ -414,15 +403,16 @@ def settings_screen():
                 for i,pv in enumerate(["center","base"]):
                     if _in_rect(mx,my,165+i*125,618,115,30): st["point"]=pv
                 # Augment click
-                if _in_rect(mx,my,715,618,150,30): st["augment"]=not st["augment"]
+                if _in_rect(mx,my,715,618,150,30): st["augment"]=not st["augment"]  # type: ignore
 
         cv2.imshow(WIN,render(hm,hmo,help_msg))
         key=cv2.waitKey(20)&0xFF
+            
         if key in (ord('q'),27): cv2.destroyAllWindows(); sys.exit(0)
-        if st["start"]: break
+        if st["start"]: break  # type: ignore
 
     cv2.destroyWindow(WIN)
-    return st["video"], _MODELS[int(st["model"])][1], _MODES[int(st["mode"])][1], st["save"], int(st["imgsz"]), float(st["conf"]), device_id, st["point"], st["augment"]
+    return st["video"], _MODELS[int(st["model"])][1], _MODES[int(st["mode"])][1], int(st["imgsz"]), float(st["conf"]), device_id, st["point"], st["augment"]
 
 
 # ─────────────────────── common drawing ───────────────────────────────────────
@@ -475,19 +465,21 @@ def _draw_lines(img, counting_lines, hover_idx=-1):
             
         # Line Number Label
         _puttext(img, f"#{i+1}", (a[0]+10, a[1]-10), 0.45, _YEL, bold=True)
-        dx,dy = b[0]-a[0],b[1]-a[1]
-        L = max((dx**2+dy**2)**0.5,1)
-        nx,ny = int(-dy/L*20),int(dx/L*20)
-        cv2.arrowedLine(img,mid,(mid[0]+nx,mid[1]+ny),(255,255,255),2,tipLength=0.3)
-        _puttext(img,f"L{i+1}",(mid[0]+10,mid[1]-10),0.6,ln["color"],bold=True)
 
-def _draw_hud(frame, counting_lines, count_mode, zone_active):
+def _draw_hud(frame, counting_lines, count_mode, zone_active, fps_val=0):
     rows = 1 + len(counting_lines) + (1 if zone_active else 0) + 2
     ph, pw = rows*32+20, 260
     ov = frame.copy()
     cv2.rectangle(ov,(10,10),(10+pw,10+ph),(15,15,18),-1)
+    
+    if fps_val > 0:
+        cv2.rectangle(ov, (10+pw-75, 10), (10+pw, 35), (30,120,50), -1)
+        
     cv2.addWeighted(ov,HUD_ALPHA,frame,1-HUD_ALPHA,0,frame)
     _puttext(frame, "CV-COUNT DASHBOARD", (20, 32), 0.45, _ACC, bold=True)
+    
+    if fps_val > 0:
+        _puttext(frame, f"{fps_val:02} FPS", (10+pw-68, 27), 0.45, _WHITE, bold=True)
     
     yc=int(65); grand=0
     if zone_active:
@@ -511,7 +503,7 @@ def _draw_hud(frame, counting_lines, count_mode, zone_active):
 # ─────────────────────── main ─────────────────────────────────────────────────
 
 def main():
-    video_path, model_name, count_mode, do_save, imgsz, conf, dev_id, poi_type, use_aug = settings_screen()
+    video_path, model_name, count_mode, imgsz, conf, dev_id, poi_type, use_aug = settings_screen()
 
     # Model load
     os.makedirs(MODELS_DIR, exist_ok=True)
@@ -532,11 +524,11 @@ def main():
     dw, dh = int(fw*scale), int(fh*scale)
 
     writer = None
-    if do_save:
-        os.makedirs(ASSETS_DIR, exist_ok=True)
-        base = os.path.splitext(os.path.basename(video_path))[0]
-        outp = os.path.join(ASSETS_DIR, f"{base}_counted.mp4")
-        writer = cv2.VideoWriter(outp, cv2.VideoWriter_fourcc(*"mp4v"), fps, (fw,fh))
+    os.makedirs(ASSETS_DIR, exist_ok=True)
+    base = os.path.splitext(os.path.basename(video_path))[0]
+    temp_outp = os.path.join(ASSETS_DIR, f"{base}_temp.mp4")
+    final_outp = os.path.join(ASSETS_DIR, f"{base}_counted.mp4")
+    writer = cv2.VideoWriter(temp_outp, cv2.VideoWriter_fourcc(*"mp4v"), fps, (fw,fh))
 
     # state
     counting_lines, zone_poly = [], []
@@ -556,18 +548,17 @@ def main():
 
     def on_m(ev,x,y,fl,_):
         nonlocal zone_drawing, line_drawing, draw_start
-        rx = int(x * (fw / dw))
-        ry = int(y * (fh / dh))
-        mouse_pos[0], mouse_pos[1] = rx, ry
+        mouse_pos[0], mouse_pos[1] = x, y
         
         if ev == cv2.EVENT_LBUTTONDOWN:
             if zone_drawing:
-                zone_poly.append((rx,ry))
+                zone_poly.append((x,y))
             elif line_drawing:
                 if draw_start is None:
-                    draw_start=(rx,ry)
+                    draw_start=(x,y)
                 else:
-                    counting_lines.append({"p1":draw_start, "p2":(rx,ry), "in":0, "out":0})
+                    c = _PALETTE[len(counting_lines) % len(_PALETTE)]
+                    counting_lines.append({"p1":draw_start, "p2":(x,y), "color":c, "in":0, "out":0})
                     draw_start = None # Stay in line mode
         elif ev == cv2.EVENT_LBUTTONDBLCLK:
             if zone_drawing and len(zone_poly) >= 3:
@@ -580,7 +571,7 @@ def main():
         # Smart Hover: Identify closest line for Smart Flip (F)
         mx, my = mouse_pos
         hover_idx = -1
-        if not (zone_drawing or line_drawing) and counting_lines:
+        if counting_lines:
             best_d = 50 # Max distance to be considered "hovered"
             for i, ln in enumerate(counting_lines):
                 ax, ay = ln["p1"]
@@ -597,8 +588,8 @@ def main():
         cv2.drawMarker(f, (mx,my), _WHITE, cv2.MARKER_CROSS, 20, 1)
 
         if line_drawing and draw_start:
-            cv2.circle(f, draw_start, 8, _YEL, -1)
-            _puttext(f, "CLICK FOR END POINT", (int(draw_start[0]+15), int(draw_start[1]-15)), 0.65, _YEL, bold=True)
+            cv2.circle(f, draw_start, 8, _YEL, -1)  # type: ignore
+            _puttext(f, "CLICK FOR END POINT", (int(draw_start[0]+15), int(draw_start[1]-15)), 0.65, _YEL, bold=True)  # type: ignore
         
         # Banner UI
         bh = fh // 20
@@ -612,7 +603,7 @@ def main():
         banner = f" [{mod}] -- [N] Line | [Z] Zone | [F] Flip Line under Mouse | [C] CLEAR | [SPACE] START "
         _puttext(f, banner, (30, fh - (bh//2) + 12), 0.75 * (fh/1080), _BG if line_drawing else _WHITE, bold=True)
         
-        cv2.imshow(WIN, cv2.resize(f, (dw, dh)))
+        cv2.imshow(WIN, f)
         
         k = cv2.waitKey(1)&0xFF
         if k in (ord('q'), 27): return
@@ -624,27 +615,32 @@ def main():
             if hover_idx >= 0:
                 ln = counting_lines[hover_idx]
                 ln["p1"], ln["p2"] = ln["p2"], ln["p1"]
-        elif k in (8, 255): # Backspace
+        elif k==8: # Backspace
             if zone_drawing and zone_poly: zone_poly.pop()
             elif counting_lines: counting_lines.pop()
         elif k==ord('c'): counting_lines.clear(); zone_poly.clear(); draw_start=None
         elif k==ord(' '):
             if counting_lines or zone_poly: break
-        
-        if cv2.getWindowProperty(WIN, cv2.WND_PROP_VISIBLE) < 1: return
-
-    # Cleanup: points are already at full resolution (fw, fh) now.
 
     # Process Phase
     paused, frame_idx, last_f = False, 0, None
     zone_active = len(zone_poly)>=3
+
+    fps_start = float(time.time())
+    fc = 0
+    cur_fps = 0
 
     while True:
         if not paused:
             ret, frame = cap.read()
             if not ret: break
             last_f = frame.copy()
-        else: frame = last_f.copy()
+            fc = fc + 1  # type: ignore
+            if time.time() - fps_start > 0.5:  # type: ignore
+                cur_fps = int(fc / (time.time() - fps_start))  # type: ignore
+                fps_start = time.time()
+                fc = 0
+        else: frame = last_f.copy() if last_f is not None else np.zeros((10,10,3), dtype=np.uint8)  # type: ignore
 
         if not paused:
             # OPTIMIZATION: Detection on resized resolution (imgsz), overlapping results back to full res.
@@ -657,31 +653,32 @@ def main():
                     tid = int(b.id[0]) if b.id is not None else -1
                     cx, cy = _get_poi(xy, poi_type)
                     inside = _inside_zone((cx,cy), zone_poly)
+                    if not inside: continue
                     
                     cv2.rectangle(frame, (xy[0],xy[1]), (xy[2],xy[3]), _GRN if inside else (50,50,220), 1)
                     if DRAW_TRACKS and tid!=-1:
-                        trails[tid].append((cx,cy))
-                        pts = list(trails[tid])
+                        trails[tid].append((cx,cy))  # type: ignore
+                        pts = list(trails[tid])  # type: ignore
                         for pi in range(1,len(pts)):
                             cv2.line(frame, pts[pi-1], pts[pi], (0,200,80) if inside else (40,40,200), 1)
                     
                     if tid!=-1:
-                        if tid not in prev_sides: prev_sides[tid]={}
+                        if tid not in prev_sides: prev_sides[tid]={}  # type: ignore
                         for li,ln in enumerate(counting_lines):
                             cur = _side((cx,cy), ln["p1"], ln["p2"])
-                            prev = prev_sides[tid].get(li)
+                            prev = prev_sides[tid].get(li)  # type: ignore
                             if prev is not None and prev!=0 and cur!=0 and (prev>0)!=(cur>0):
                                 if inside:
                                     if count_mode=="both_add": ln["in" if prev>0 else "out"]+=1
                                     elif count_mode=="one_way" and prev>0: ln["in"]+=1
                                     elif count_mode=="net": ln["in" if prev>0 else "out"]+=1
-                            if cur!=0: prev_sides[tid][li] = cur
+                            if cur!=0: prev_sides[tid][li] = cur  # type: ignore
                             
         _draw_lines(frame, counting_lines)
-        _draw_hud(frame, counting_lines, count_mode, zone_active)
+        _draw_hud(frame, counting_lines, count_mode, zone_active, cur_fps)
         if paused: _puttext(frame, "PAUSED", (fw//2-100, fh//2), 2.0, _ACC, 4)
         
-        if writer: writer.write(frame)
+        if writer: writer.write(frame)  # type: ignore
         cv2.imshow(WIN, frame)
         k = cv2.waitKey(1)&0xFF
         if k in (ord('q'),27): break
@@ -691,8 +688,68 @@ def main():
             prev_sides.clear()
 
     cap.release()
-    if writer: writer.release()
+    if writer: writer.release()  # type: ignore
     cv2.destroyAllWindows()
+
+    # ─────────────────────── POST-PROCESS REPORT ────────────────────────────────
+
+    WIN_REP = "Final Report"
+    cv2.namedWindow(WIN_REP, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN_REP, 700, 500)
+    
+    saved = False
+    done = False
+    
+    def on_m_rep(ev,x,y,fl,_):
+        nonlocal saved, done
+        if ev == cv2.EVENT_LBUTTONDOWN:
+            if _in_rect(x,y, 100, 380, 200, 50): # SAVE
+                saved = True; done = True
+            elif _in_rect(x,y, 400, 380, 200, 50): # DISCARD
+                saved = False; done = True
+    cv2.setMouseCallback(WIN_REP, on_m_rep)
+    
+    while not done:
+        img = np.full((500, 700, 3), _BG, dtype=np.uint8)
+        _puttext(img, "FINAL COUNT REPORT", (180, 80), 1.0, _ACC, bold=True)
+        
+        grand = 0
+        yc = 150
+        for i, ln in enumerate(counting_lines):
+            v = (ln["in"]+ln["out"]) if count_mode=="both_add" else (ln["in"] if count_mode=="one_way" else ln["in"]-ln["out"])
+            grand += v
+            _puttext(img, f"Line {i+1}:", (200, yc), 0.7, (230,230,230))
+            _puttext(img, str(v), (450, yc), 0.8, ln.get("color", _YEL), bold=True)
+            yc += 45
+        
+        cv2.line(img, (150, yc), (550, yc), (70,70,75), 1)
+        yc += 40
+        _puttext(img, "GRAND TOTAL:", (200, yc), 0.8, _WHITE, bold=True)
+        _puttext(img, str(grand), (450, yc), 1.0, _GRN, bold=True)
+        
+        # SAVE BTN
+        cv2.rectangle(img, (100, 380), (300, 430), _GRN, -1)
+        _puttext(img, "SAVE VIDEO", (135, 412), 0.6, _WHITE, bold=True)
+        # DISCARD BTN
+        cv2.rectangle(img, (400, 380), (600, 430), (50,50,60), -1)
+        _puttext(img, "DISCARD", (445, 412), 0.6, _WHITE, bold=True)
+        
+        cv2.imshow(WIN_REP, img)
+        k = cv2.waitKey(20) & 0xFF
+        if k in (13, 32): 
+            saved = True; done = True
+        elif k in (27, ord('q')): 
+            saved = False; done = True
+            
+        if cv2.getWindowProperty(WIN_REP, cv2.WND_PROP_AUTOSIZE) == -1: break
+            
+    cv2.destroyAllWindows()
+    
+    if saved:
+        if os.path.exists(final_outp): os.remove(final_outp)
+        os.rename(temp_outp, final_outp)
+    else:
+        if os.path.exists(temp_outp): os.remove(temp_outp)
 
 if __name__=="__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))

@@ -25,7 +25,7 @@ def check_apple_silicon():
 def check_torch_cuda():
     """Check if the currently installed PyTorch already has CUDA capability."""
     try:
-        import torch
+        import torch  # type: ignore # pyre-ignore
         return torch.cuda.is_available()
     except:
         return False
@@ -59,7 +59,7 @@ def install():
         
         if choice in ('', 'y', 'yes'):
             print("\n[ACTION]   Optimizing environment for CUDA Acceleration (2.6GB download)...")
-            cmd = f"{python} -m pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu121 --force-reinstall"
+            cmd = f"{python} -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --force-reinstall"
         else:
             print("\n[ACTION]   Skipping large download. Installing standard CPU version...")
             cmd = f"{python} -m pip install torch torchvision torchaudio"
@@ -78,6 +78,20 @@ def install():
     print("\n" + "="*50)
     print("  SETUP COMPLETE!")
     print("="*50)
+    
+    import shutil
+    import os
+    test_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test")
+    assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    if os.path.exists(test_dir):
+        os.makedirs(assets_dir, exist_ok=True)
+        for tf in os.listdir(test_dir):
+            tp = os.path.join(test_dir, tf)
+            ap = os.path.join(assets_dir, tf)
+            if not os.path.exists(ap) and os.path.isfile(tp):
+                shutil.copy2(tp, ap)
+                print(f"[ACTION]   Restored default video -> {tf}")
+
     
     choice = input("\nWould you like to launch CV-Count now? (Y/N) [Y]: ").strip().lower()
     if choice in ('', 'y', 'yes'):

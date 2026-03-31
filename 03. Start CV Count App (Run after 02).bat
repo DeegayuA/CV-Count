@@ -21,9 +21,6 @@ if %errorlevel% neq 0 (
 set PY_CMD=python
 if exist "C:\Python314\python.exe" set PY_CMD=C:\Python314\python.exe
 
-echo [INFO] Installing/Updating requirements...
-%PY_CMD% -m pip install --upgrade pip
-%PY_CMD% -m pip install -r requirements.txt
 
 echo [INFO] Launching CV-Count...
 %PY_CMD% counter.py
