@@ -11,6 +11,16 @@
 
 ---
 
+## 🎥 Instructional Video
+
+Watch the full guided tutorial on how to configure models, map interactive tracking grids, and utilize the dashboard:
+
+https://github.com/DeegayuA/CV-Count/raw/main/04.%20How%20to%20use%20Video.mp4
+
+> **Note:** If the video does not autoplay, you can manually open [04. How to use Video.mp4](./04.%20How%20to%20use%20Video.mp4) natively on your desktop.
+
+---
+
 ## 🚀 Getting Started
 
 ### 1. Requirements
