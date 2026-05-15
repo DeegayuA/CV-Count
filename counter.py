@@ -14,7 +14,7 @@ FLOW:
   3. SPACE to start counting
 """
 
-import sys, os, collections, time, tkinter as tk
+import sys, os, collections, time, json, hashlib, tkinter as tk
 from tkinter import filedialog
 import cv2  # type: ignore
 import numpy as np  # type: ignore
@@ -34,6 +34,7 @@ except ImportError:
 
 ASSETS_DIR     = "assets"
 MODELS_DIR     = "models"
+CONFIGS_DIR    = "configs"
 DEFAULT_VIDEO  = os.path.join(ASSETS_DIR, "01.30fps.mp4")
 CLASSES        = [0]
 CONF           = 0.35
@@ -46,6 +47,11 @@ LINE_THICKNESS = 3
 HUD_ALPHA      = 0.70
 MAX_WIN_W      = 1280
 MAX_WIN_H      = 850
+
+# Counting accuracy
+CROSSING_COOLDOWN = 30   # Ignore re-crossings for N frames after a count
+MIN_TRAVEL_DIST   = 15   # Min px travel since last crossing to count again
+SMOOTH_WINDOW     = 5    # Rolling average window for position smoothing
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -78,6 +84,69 @@ def _inside_zone(pt, zone_poly):
     if not zone_poly or len(zone_poly) < 3: return True
     poly = np.array(zone_poly, dtype=np.int32)
     return cv2.pointPolygonTest(poly, (float(pt[0]),float(pt[1])), False) >= 0
+
+
+# ─────────────────────── ROI persistence ─────────────────────────────────────
+
+def _config_path(video_source):
+    """Return the JSON file path for a video/camera source's ROI config."""
+    os.makedirs(CONFIGS_DIR, exist_ok=True)
+    if isinstance(video_source, int):
+        name = f"cam_{video_source}"
+    else:
+        name = hashlib.sha256(os.path.abspath(str(video_source)).encode()).hexdigest()[:16]
+    return os.path.join(CONFIGS_DIR, f"{name}.json")
+
+def _save_roi(video_source, counting_lines, zone_poly):
+    """Save lines and zone polygon to a JSON config file."""
+    data = {
+        "video_source": str(video_source),
+        "counting_lines": [
+            {"p1": list(ln["p1"]), "p2": list(ln["p2"]),
+             "color": list(ln["color"])}
+            for ln in counting_lines
+        ],
+        "zone_poly": [list(p) for p in zone_poly],
+    }
+    path = _config_path(video_source)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def _load_roi(video_source):
+    """Load saved lines and zone polygon. Returns (counting_lines, zone_poly)."""
+    path = _config_path(video_source)
+    if not os.path.isfile(path):
+        return [], []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        lines = []
+        for i, ln in enumerate(data.get("counting_lines", [])):
+            lines.append({
+                "p1": tuple(ln["p1"]),
+                "p2": tuple(ln["p2"]),
+                "color": tuple(ln.get("color", _PALETTE[i % len(_PALETTE)])),
+                "in": 0, "out": 0,
+            })
+        zone = [tuple(p) for p in data.get("zone_poly", [])]
+        return lines, zone
+    except Exception:
+        return [], []
+
+
+# ─────────────────────── smoothed position tracker ───────────────────────────
+
+class _PosSmoother:
+    """Rolling average of (cx, cy) per track to reduce jitter."""
+    def __init__(self, window=SMOOTH_WINDOW):
+        self._buf = collections.defaultdict(lambda: collections.deque(maxlen=window))
+
+    def update(self, tid, cx, cy):
+        self._buf[tid].append((cx, cy))
+        pts = self._buf[tid]
+        sx = sum(p[0] for p in pts) / len(pts)
+        sy = sum(p[1] for p in pts) / len(pts)
+        return int(sx), int(sy)
 
 def _detect_device():
     """Detect available GPU/NPU acceleration for YOLO inference."""
@@ -525,10 +594,15 @@ def main():
 
     writer = None
     os.makedirs(ASSETS_DIR, exist_ok=True)
-    base = os.path.splitext(os.path.basename(video_path))[0]
+    base = os.path.splitext(os.path.basename(str(video_path)))[0] if not isinstance(video_path, int) else f"cam_{video_path}"
     temp_outp = os.path.join(ASSETS_DIR, f"{base}_temp.mp4")
     final_outp = os.path.join(ASSETS_DIR, f"{base}_counted.mp4")
-    writer = cv2.VideoWriter(temp_outp, cv2.VideoWriter_fourcc(*"mp4v"), fps, (fw,fh))
+    # Try H.264 first (widely compatible), fallback to mp4v
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
+    writer = cv2.VideoWriter(temp_outp, fourcc, fps, (fw,fh))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(temp_outp, fourcc, fps, (fw,fh))
 
     # state
     counting_lines, zone_poly = [], []
@@ -536,6 +610,13 @@ def main():
     prev_sides = {}
     trails = collections.defaultdict(lambda: collections.deque(maxlen=TRAIL_LEN))
     mouse_pos = [0,0]
+
+    # Auto-load saved ROI for this video source
+    saved_lines, saved_zone = _load_roi(video_path)
+    if saved_lines:
+        counting_lines.extend(saved_lines)
+    if saved_zone:
+        zone_poly.extend(saved_zone)
 
     WIN = "CV-Count"
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
@@ -600,7 +681,7 @@ def main():
         cv2.rectangle(f, (0, fh-bh), (fw, fh), banner_bg, -1)
         
         mod = "ZONE (DBL-CLICK TO FINISH)" if zone_drawing else ("LINE (CONTINUOUS)" if line_drawing else "READY")
-        banner = f" [{mod}] -- [N] Line | [Z] Zone | [F] Flip Line under Mouse | [C] CLEAR | [SPACE] START "
+        banner = f" [{mod}] [N]Line [Z]Zone [F]Flip [C]Clear [S]Save [L]Load [SPACE]Start"
         _puttext(f, banner, (30, fh - (bh//2) + 12), 0.75 * (fh/1080), _BG if line_drawing else _WHITE, bold=True)
         
         cv2.imshow(WIN, f)
@@ -619,12 +700,27 @@ def main():
             if zone_drawing and zone_poly: zone_poly.pop()
             elif counting_lines: counting_lines.pop()
         elif k==ord('c'): counting_lines.clear(); zone_poly.clear(); draw_start=None
+        elif k==ord('s'):
+            _save_roi(video_path, counting_lines, zone_poly)
+        elif k==ord('l'):
+            loaded_lines, loaded_zone = _load_roi(video_path)
+            if loaded_lines or loaded_zone:
+                counting_lines.clear(); zone_poly.clear()
+                counting_lines.extend(loaded_lines)
+                zone_poly.extend(loaded_zone)
         elif k==ord(' '):
-            if counting_lines or zone_poly: break
+            if counting_lines or zone_poly:
+                _save_roi(video_path, counting_lines, zone_poly)
+                break
 
     # Process Phase
     paused, frame_idx, last_f = False, 0, None
     zone_active = len(zone_poly)>=3
+
+    # Counting accuracy state
+    smoother = _PosSmoother(SMOOTH_WINDOW)
+    cooldowns = {}       # (tid, li) -> frames remaining
+    last_cross_pos = {}  # (tid, li) -> (x, y) at last counted crossing
 
     fps_start = float(time.time())
     fc = 0
@@ -643,6 +739,15 @@ def main():
         else: frame = last_f.copy() if last_f is not None else np.zeros((10,10,3), dtype=np.uint8)  # type: ignore
 
         if not paused:
+            frame_idx += 1
+
+            # Tick down all cooldowns
+            expired = [k for k, v in cooldowns.items() if v <= 0]
+            for k in expired:
+                del cooldowns[k]
+            for k in list(cooldowns):
+                cooldowns[k] -= 1
+
             # OPTIMIZATION: Detection on resized resolution (imgsz), overlapping results back to full res.
             res = model.track(frame, imgsz=imgsz, conf=conf, iou=IOU, persist=True, tracker=TRACKER, verbose=False, classes=CLASSES, device=dev_id, augment=use_aug)
             if zone_active: _draw_zone(frame, zone_poly)
@@ -651,7 +756,14 @@ def main():
                 for b in res[0].boxes:
                     xy = b.xyxy[0].cpu().numpy().astype(int)
                     tid = int(b.id[0]) if b.id is not None else -1
-                    cx, cy = _get_poi(xy, poi_type)
+                    raw_cx, raw_cy = _get_poi(xy, poi_type)
+
+                    # Smoothed position to reduce jitter
+                    if tid != -1:
+                        cx, cy = smoother.update(tid, raw_cx, raw_cy)
+                    else:
+                        cx, cy = raw_cx, raw_cy
+
                     inside = _inside_zone((cx,cy), zone_poly)
                     if not inside: continue
                     
@@ -668,10 +780,25 @@ def main():
                             cur = _side((cx,cy), ln["p1"], ln["p2"])
                             prev = prev_sides[tid].get(li)  # type: ignore
                             if prev is not None and prev!=0 and cur!=0 and (prev>0)!=(cur>0):
+                                # Cooldown check: skip if recently counted
+                                if (tid, li) in cooldowns:
+                                    if cur!=0: prev_sides[tid][li] = cur  # type: ignore
+                                    continue
+                                # Min travel distance check
+                                lcp = last_cross_pos.get((tid, li))
+                                if lcp is not None:
+                                    dist = np.sqrt((cx - lcp[0])**2 + (cy - lcp[1])**2)
+                                    if dist < MIN_TRAVEL_DIST:
+                                        if cur!=0: prev_sides[tid][li] = cur  # type: ignore
+                                        continue
+                                # Count the crossing
                                 if inside:
                                     if count_mode=="both_add": ln["in" if prev>0 else "out"]+=1
                                     elif count_mode=="one_way" and prev>0: ln["in"]+=1
                                     elif count_mode=="net": ln["in" if prev>0 else "out"]+=1
+                                    # Set cooldown and record crossing position
+                                    cooldowns[(tid, li)] = CROSSING_COOLDOWN
+                                    last_cross_pos[(tid, li)] = (cx, cy)
                             if cur!=0: prev_sides[tid][li] = cur  # type: ignore
                             
         _draw_lines(frame, counting_lines)
@@ -689,67 +816,149 @@ def main():
 
     cap.release()
     if writer: writer.release()  # type: ignore
-    cv2.destroyAllWindows()
 
     # ─────────────────────── POST-PROCESS REPORT ────────────────────────────────
+    # Create report window BEFORE destroying the counting window
+    # to prevent macOS from killing the OpenCV event loop.
 
-    WIN_REP = "Final Report"
+    WIN_REP = "CV-Count -- Final Report"
     cv2.namedWindow(WIN_REP, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN_REP, 700, 500)
+    cv2.resizeWindow(WIN_REP, 750, 550)
+    cv2.waitKey(100)  # Let macOS init the window
+
+    try: cv2.destroyWindow(WIN)
+    except: pass
     
-    saved = False
-    done = False
+    video_saved = False
+    video_decided = False   # True after user clicks Save or Discard
+    
+    rep_mouse = {"x": 0, "y": 0}
     
     def on_m_rep(ev,x,y,fl,_):
-        nonlocal saved, done
-        if ev == cv2.EVENT_LBUTTONDOWN:
-            if _in_rect(x,y, 100, 380, 200, 50): # SAVE
-                saved = True; done = True
-            elif _in_rect(x,y, 400, 380, 200, 50): # DISCARD
-                saved = False; done = True
+        nonlocal video_saved, video_decided
+        rep_mouse["x"], rep_mouse["y"] = x, y
+        if ev == cv2.EVENT_LBUTTONDOWN and not video_decided:
+            if _in_rect(x,y, 80, 420, 260, 55): # SAVE
+                video_saved = True; video_decided = True
+            elif _in_rect(x,y, 410, 420, 260, 55): # DISCARD
+                video_saved = False; video_decided = True
     cv2.setMouseCallback(WIN_REP, on_m_rep)
     
-    while not done:
-        img = np.full((500, 700, 3), _BG, dtype=np.uint8)
-        _puttext(img, "FINAL COUNT REPORT", (180, 80), 1.0, _ACC, bold=True)
+    # Perform save/discard once decided
+    def _do_video_action():
+        if video_saved:
+            if os.path.exists(final_outp): os.remove(final_outp)
+            os.rename(temp_outp, final_outp)
+            print(f"[CV-COUNT] Video saved: {os.path.abspath(final_outp)}")
+        else:
+            if os.path.exists(temp_outp): os.remove(temp_outp)
+            print("[CV-COUNT] Video discarded.")
+    
+    action_done = False
+    
+    # Flush any leftover key events from the processing phase
+    for _ in range(5):
+        cv2.waitKey(1)
+    
+    while True:
+        img = np.full((550, 750, 3), _BG, dtype=np.uint8)
+        
+        # Header bar
+        cv2.rectangle(img, (0, 0), (750, 60), _CARD, -1)
+        cv2.line(img, (0, 60), (750, 60), _ACC, 2)
+        _puttext(img, "FINAL COUNT REPORT", (220, 42), 0.85, _ACC, bold=True)
         
         grand = 0
-        yc = 150
+        yc = 100
+        
+        # IN / OUT header
+        _puttext(img, "IN", (430, yc), 0.45, _GRN, bold=True)
+        _puttext(img, "OUT", (510, yc), 0.45, _RED, bold=True)
+        _puttext(img, "TOTAL", (590, yc), 0.45, _ACC, bold=True)
+        yc += 35
+        
         for i, ln in enumerate(counting_lines):
             v = (ln["in"]+ln["out"]) if count_mode=="both_add" else (ln["in"] if count_mode=="one_way" else ln["in"]-ln["out"])
             grand += v
-            _puttext(img, f"Line {i+1}:", (200, yc), 0.7, (230,230,230))
-            _puttext(img, str(v), (450, yc), 0.8, ln.get("color", _YEL), bold=True)
-            yc += 45
+            cv2.circle(img, (95, yc-6), 7, ln.get("color", _YEL), -1)
+            _puttext(img, f"Line {i+1}", (115, yc), 0.55, (230,230,230))
+            _puttext(img, str(ln["in"]), (435, yc), 0.55, _GRN)
+            _puttext(img, str(ln["out"]), (515, yc), 0.55, _RED)
+            t = f"{v:+d}" if count_mode=="net" else str(v)
+            _puttext(img, t, (595, yc), 0.55, ln.get("color", _YEL), bold=True)
+            yc += 40
         
-        cv2.line(img, (150, yc), (550, yc), (70,70,75), 1)
-        yc += 40
-        _puttext(img, "GRAND TOTAL:", (200, yc), 0.8, _WHITE, bold=True)
-        _puttext(img, str(grand), (450, yc), 1.0, _GRN, bold=True)
+        cv2.line(img, (80, yc), (670, yc), (70,70,75), 1)
+        yc += 35
+        _puttext(img, "GRAND TOTAL", (115, yc), 0.7, _WHITE, bold=True)
+        gt = f"{grand:+d}" if count_mode=="net" else str(grand)
+        cv2.putText(img, gt, (570, yc+2), cv2.FONT_HERSHEY_DUPLEX, 0.9, _GRN, 2)
         
-        # SAVE BTN
-        cv2.rectangle(img, (100, 380), (300, 430), _GRN, -1)
-        _puttext(img, "SAVE VIDEO", (135, 412), 0.6, _WHITE, bold=True)
-        # DISCARD BTN
-        cv2.rectangle(img, (400, 380), (600, 430), (50,50,60), -1)
-        _puttext(img, "DISCARD", (445, 412), 0.6, _WHITE, bold=True)
+        if not video_decided:
+            # --- Phase 1: Show Save / Discard buttons ---
+            yc += 50
+            _puttext(img, "Save to:", (80, yc), 0.38, _MUT)
+            out_path_str = os.path.abspath(final_outp)
+            if len(out_path_str) > 75: out_path_str = "..." + out_path_str[-72:]
+            _puttext(img, out_path_str, (150, yc), 0.35, _INF)
+            
+            # SAVE BTN
+            sv_hov = _in_rect(rep_mouse["x"], rep_mouse["y"], 80, 420, 260, 55)
+            cv2.rectangle(img, (80, 420), (340, 475), _GRN if not sv_hov else (0,220,0), -1)
+            _puttext(img, "SAVE COUNTED VIDEO", (100, 455), 0.55, _WHITE, bold=True)
+            
+            # DISCARD BTN
+            ds_hov = _in_rect(rep_mouse["x"], rep_mouse["y"], 410, 420, 260, 55)
+            cv2.rectangle(img, (410, 420), (670, 475), (70,60,55) if ds_hov else (50,50,60), -1)
+            cv2.rectangle(img, (410, 420), (670, 475), _MUT, 1)
+            _puttext(img, "DISCARD", (490, 455), 0.55, _WHITE if ds_hov else _MUT)
+            
+            # Keyboard hints
+            _puttext(img, "[ENTER/SPACE] Save  |  [D] Discard  |  [Q/ESC] Close", (130, 520), 0.38, _MUT)
+        else:
+            # --- Phase 2: Show confirmation, stay open ---
+            if not action_done:
+                _do_video_action()
+                action_done = True
+            
+            if video_saved:
+                cv2.rectangle(img, (80, 410), (670, 480), (0, 80, 40), -1)
+                cv2.rectangle(img, (80, 410), (670, 480), _GRN, 2)
+                _puttext(img, "VIDEO SAVED SUCCESSFULLY", (185, 440), 0.65, _GRN, bold=True)
+                out_path_str = os.path.abspath(final_outp)
+                if len(out_path_str) > 75: out_path_str = "..." + out_path_str[-72:]
+                _puttext(img, out_path_str, (110, 468), 0.38, _INF)
+            else:
+                cv2.rectangle(img, (80, 410), (670, 470), (40, 30, 30), -1)
+                cv2.rectangle(img, (80, 410), (670, 470), _MUT, 1)
+                _puttext(img, "VIDEO DISCARDED", (250, 447), 0.6, _MUT)
+            
+            _puttext(img, "[Q / ESC / Close Window] to exit", (210, 520), 0.42, _MUT)
         
         cv2.imshow(WIN_REP, img)
-        k = cv2.waitKey(20) & 0xFF
-        if k in (13, 32): 
-            saved = True; done = True
-        elif k in (27, ord('q')): 
-            saved = False; done = True
+        k = cv2.waitKey(30) & 0xFF
+        
+        if not video_decided:
+            if k in (13, 32):     # Enter/Space -> Save
+                video_saved = True; video_decided = True
+            elif k == ord('d'):   # D -> Discard
+                video_saved = False; video_decided = True
+            elif k in (27, ord('q')):  # ESC/Q -> Discard and close
+                video_saved = False; video_decided = True
+                if not action_done: _do_video_action(); action_done = True
+                break
+        else:
+            if k in (27, ord('q')): break
+        
+        # Check if window was closed via X button (use WND_PROP_VISIBLE, not AUTOSIZE)
+        try:
+            if cv2.getWindowProperty(WIN_REP, cv2.WND_PROP_VISIBLE) < 1: break
+        except: break
             
-        if cv2.getWindowProperty(WIN_REP, cv2.WND_PROP_AUTOSIZE) == -1: break
-            
-    cv2.destroyAllWindows()
+    if not action_done:
+        _do_video_action()
     
-    if saved:
-        if os.path.exists(final_outp): os.remove(final_outp)
-        os.rename(temp_outp, final_outp)
-    else:
-        if os.path.exists(temp_outp): os.remove(temp_outp)
+    cv2.destroyAllWindows()
 
 if __name__=="__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))

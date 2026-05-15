@@ -9,7 +9,7 @@ def check_nvidia_gpu():
         res = subprocess.run(["nvidia-smi"], capture_output=True)
         if res.returncode == 0: return True
     except: pass
-    
+    yield
     try:
         # Alternate way via Windows management
         res = subprocess.run(["wmic", "path", "win32_VideoController", "get", "name"], capture_output=True, text=True)
